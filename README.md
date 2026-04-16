@@ -1,6 +1,7 @@
+```markdown
 # GoRAT
 
-GoRAT是一个跨平台的远程管理工具，提供客户端和服务端组件，支持Windows和Linux系统。
+GoRAT是一个跨平台的远程访问木马，提供客户端和服务端组件，支持Windows和Linux系统。
 
 ## 功能特性
 
@@ -23,6 +24,7 @@ GoRAT是一个跨平台的远程管理工具，提供客户端和服务端组件
 ## 项目结构
 
 ```
+
 GoRAT/
 ├── client/            # 客户端程序
 │   ├── main.go        # 客户端主程序（跨平台）
@@ -47,6 +49,7 @@ GoRAT/
 │   ├── test_client_server.go
 │   └── test_cross_platform.go
 └── README.md          # 项目说明
+
 ```
 
 ## 技术栈
@@ -89,7 +92,7 @@ S3_BUCKET=gorat-data
 JWT_SECRET=your-jwt-secret-key
 ```
 
-#### 1.2 启动后端服务
+1.2 启动后端服务
 
 ```bash
 cd server/backend
@@ -97,7 +100,7 @@ go mod download
 go run main.go
 ```
 
-#### 1.3 启动前端服务
+1.3 启动前端服务
 
 ```bash
 cd server/frontend
@@ -106,12 +109,13 @@ npm run dev
 ```
 
 服务端访问地址：
-- 后端API：http://localhost:8000
-- 前端界面：http://localhost:3000
 
-### 2. 编译客户端
+· 后端API：http://localhost:8000
+· 前端界面：http://localhost:3000
 
-#### 2.1 跨平台编译
+2. 编译客户端
+
+2.1 跨平台编译
 
 使用提供的编译脚本：
 
@@ -122,43 +126,48 @@ chmod +x build.sh
 ```
 
 编译选项：
+
 1. 编译Windows版本
 2. 编译Linux版本
 3. 编译所有版本
 
-#### 2.2 手动编译
+2.2 手动编译
 
-**Windows版本**：
+Windows版本：
+
 ```bash
 GOOS=windows GOARCH=amd64 go build -o gorat-client.exe main.go
 ```
 
-**Linux版本**：
+Linux版本：
+
 ```bash
 GOOS=linux GOARCH=amd64 go build -o gorat-client main.go
 ```
 
-### 3. 安装客户端
+3. 安装客户端
 
-#### Windows系统
+Windows系统
 
 1. 以管理员身份运行命令提示符
 2. 执行安装脚本：
+
 ```cmd
 install.bat
 ```
 
-#### Linux系统
+Linux系统
 
 1. 赋予执行权限并运行安装脚本：
+
 ```bash
 chmod +x install.sh
 sudo ./install.sh
 ```
 
-## 使用说明
+使用说明
 
-### 客户端配置
+客户端配置
 
 首次运行客户端时，需要配置服务端地址：
 
@@ -171,12 +180,13 @@ gorat-client.exe --server http://your-server:8000
 ```
 
 客户端会自动：
+
 1. 向服务端注册
 2. 获取Client ID和Client Key
 3. 下载S3配置
 4. 开始采集和上传数据
 
-### 服务端管理
+服务端管理
 
 1. 访问Web管理界面：http://your-server:3000
 2. 使用默认管理员账户登录（首次登录请修改密码）
@@ -184,17 +194,19 @@ gorat-client.exe --server http://your-server:8000
 4. 查看客户端上传的视频和系统信息
 5. 执行远程控制操作
 
-## 开发指南
+开发指南
 
-### 本地开发
+本地开发
 
 1. 克隆仓库：
+
 ```bash
 git clone https://github.com/muyuzier-afk/GoRAT.git
 cd GoRAT
 ```
 
-2. 启动开发环境：
+1. 启动开发环境：
+
 ```bash
 # 启动数据库（使用Docker）
 docker run -d --name gorat-postgres -p 5432:5432 -e POSTGRES_PASSWORD=password postgres
@@ -203,7 +215,7 @@ docker run -d --name gorat-postgres -p 5432:5432 -e POSTGRES_PASSWORD=password p
 docker run -d --name gorat-minio -p 9000:9000 -p 9001:9001 minio/minio server /data --console-address ":9001"
 ```
 
-### 运行测试
+运行测试
 
 ```bash
 cd test
@@ -211,73 +223,29 @@ go run test_cross_platform.go
 ```
 
 测试内容包括：
-- 服务端健康检查
-- 客户端注册流程
-- 跨平台功能验证
-- 心跳检测
 
-## 故障排除
+· 服务端健康检查
+· 客户端注册流程
+· 跨平台功能验证
+· 心跳检测
 
-### 常见问题
+故障排除
 
-**1. 客户端无法连接服务端**
-- 检查网络连接
-- 确认服务端地址和端口配置正确
-- 检查防火墙设置
 
-**2. 视频采集失败**
-- 确认FFmpeg已正确安装
-- 检查摄像头/麦克风权限
-- 查看客户端日志文件
+许可证
 
-**3. 服务端启动失败**
-- 检查数据库连接配置
-- 确认端口未被占用
-- 查看服务端日志
+本项目使用MIT Lincens.
 
-**4. S3上传失败**
-- 检查S3配置是否正确
-- 确认Access Key和Secret Key有效
-- 检查Bucket权限设置
-
-### 日志位置
-
-- **Windows客户端**：`C:\ProgramData\GoRAT\logs\`
-- **Linux客户端**：`/var/log/gorat/`
-- **服务端**：`server/backend/logs/`
-
-## 安全说明
-
-### 安全建议
-
-1. **生产环境部署**
-   - 使用HTTPS加密通信
-   - 配置强密码和JWT密钥
-   - 定期更新依赖包
-   - 限制API访问IP
-
-2. **客户端安全**
-   - 客户端凭证存储在本地配置文件中
-   - 建议使用文件系统权限保护配置文件
-   - 定期轮换客户端凭证
-
-3. **数据安全**
-   - 敏感数据建议在客户端加密后上传
-   - S3存储建议开启版本控制和加密
-   - 定期备份重要数据
-
-## 许可证
-
-本项目仅供学习和研究使用。
-
-## 贡献
+贡献
 
 欢迎提交Issue和Pull Request！
 
-## 联系方式
+联系方式
 
 如有问题或建议，请通过GitHub Issues联系。
 
 ---
 
-**注意**：请合法使用本软件，仅用于授权的系统管理和安全研究目的。
+注意：请合法使用本软件，仅用于授权的系统管理和安全研究目的。
+
+```
