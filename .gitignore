@@ -1,0 +1,18 @@
+# 编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 依赖
+vendor/
+node_modules/
+
+# 配置文件
+.env
+factoryeye_config.json
+
+# 临时文件
+*.tmp
+*.temp
