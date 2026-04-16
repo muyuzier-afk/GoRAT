@@ -3,6 +3,8 @@ package utils
 import (
 	"bytes"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -12,7 +14,6 @@ import (
 
 var S3Client *s3.S3
 
-// InitS3Client 初始化S3客户端
 func InitS3Client() error {
 	s3Endpoint := os.Getenv("S3_ENDPOINT")
 	if s3Endpoint == "" {
@@ -39,12 +40,28 @@ func InitS3Client() error {
 	return nil
 }
 
-// UploadToS3 上传文件到S3
 func UploadToS3(bucket, key string, data []byte) error {
 	_, err := S3Client.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-		Body:   aws.ReadSeekCloser(os.NewReader(bytes.NewReader(data))),
+		Body:   bytes.NewReader(data),
 	})
 	return err
+}
+
+func GeneratePresignedPutURL(bucket, keyPrefix string, expiry time.Duration) (string, error) {
+	key := strings.TrimSuffix(keyPrefix, "/")
+	req, _ := S3Client.PutObjectRequest(&s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	return req.Presign(expiry)
+}
+
+func GeneratePresignedGetURL(bucket, key string, expiry time.Duration) (string, error) {
+	req, _ := S3Client.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	return req.Presign(expiry)
 }

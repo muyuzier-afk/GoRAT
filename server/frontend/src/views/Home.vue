@@ -4,6 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>系统概览</span>
+          <el-button size="small" @click="loadData">刷新</el-button>
         </div>
       </template>
       <div class="overview-stats">
@@ -11,7 +12,7 @@
           <el-col :span="6">
             <el-card class="stat-card">
               <div class="stat-content">
-                <div class="stat-number">{{ totalClients }}</div>
+                <div class="stat-number">{{ stats.totalClients }}</div>
                 <div class="stat-label">总客户端</div>
               </div>
             </el-card>
@@ -19,7 +20,7 @@
           <el-col :span="6">
             <el-card class="stat-card">
               <div class="stat-content">
-                <div class="stat-number">{{ onlineClients }}</div>
+                <div class="stat-number">{{ stats.onlineClients }}</div>
                 <div class="stat-label">在线客户端</div>
               </div>
             </el-card>
@@ -27,7 +28,7 @@
           <el-col :span="6">
             <el-card class="stat-card">
               <div class="stat-content">
-                <div class="stat-number">{{ totalFiles }}</div>
+                <div class="stat-number">{{ stats.totalFiles }}</div>
                 <div class="stat-label">总文件数</div>
               </div>
             </el-card>
@@ -35,91 +36,94 @@
           <el-col :span="6">
             <el-card class="stat-card">
               <div class="stat-content">
-                <div class="stat-number">{{ totalStorage }} GB</div>
-                <div class="stat-label">总存储</div>
+                <div class="stat-number">{{ stats.onlineClients }} / {{ stats.totalClients }}</div>
+                <div class="stat-label">在线率</div>
               </div>
             </el-card>
           </el-col>
         </el-row>
       </div>
-      <div class="chart-container">
-        <el-card class="chart-card">
-          <template #header>
-            <span>系统负载</span>
-          </template>
-          <div id="loadChart" style="width: 100%; height: 300px;"></div>
-        </el-card>
+      <div class="recent-section">
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-card>
+              <template #header><span>最近上线客户端</span></template>
+              <el-table :data="recentClients" style="width: 100%" size="small">
+                <el-table-column prop="name" label="名称"></el-table-column>
+                <el-table-column prop="device_id" label="设备ID" width="160"></el-table-column>
+                <el-table-column prop="status" label="状态" width="80">
+                  <template #default="scope">
+                    <el-tag :type="scope.row.status === 'online' ? 'success' : 'danger'" size="small">
+                      {{ scope.row.status === 'online' ? '在线' : '离线' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+          </el-col>
+          <el-col :span="12">
+            <el-card>
+              <template #header><span>最近上传文件</span></template>
+              <el-table :data="recentFiles" style="width: 100%" size="small">
+                <el-table-column prop="filename" label="文件名"></el-table-column>
+                <el-table-column prop="type" label="类型" width="80">
+                  <template #default="scope">
+                    <el-tag size="small">{{ scope.row.type }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="大小" width="100">
+                  <template #default="scope">{{ formatSize(scope.row.size) }}</template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+          </el-col>
+        </el-row>
       </div>
     </el-card>
   </div>
 </template>
 
 <script>
+import axios from 'axios'
+
 export default {
   name: 'Home',
   data() {
     return {
-      totalClients: 0,
-      onlineClients: 0,
-      totalFiles: 0,
-      totalStorage: 0,
-      loadChart: null
+      stats: { totalClients: 0, onlineClients: 0, totalFiles: 0 },
+      recentClients: [],
+      recentFiles: []
     }
   },
   mounted() {
     this.loadData()
-    this.initChart()
   },
   methods: {
-    loadData() {
-      // 模拟数据，实际项目中应该从API获取
-      this.totalClients = 10
-      this.onlineClients = 8
-      this.totalFiles = 120
-      this.totalStorage = 15.6
-    },
-    initChart() {
-      // 模拟图表数据
-      const echarts = require('echarts')
-      this.loadChart = echarts.init(document.getElementById('loadChart'))
-      
-      const option = {
-        tooltip: {
-          trigger: 'axis'
-        },
-        legend: {
-          data: ['CPU', '内存']
-        },
-        grid: {
-          left: '3%',
-          right: '4%',
-          bottom: '3%',
-          containLabel: true
-        },
-        xAxis: {
-          type: 'category',
-          boundaryGap: false,
-          data: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00']
-        },
-        yAxis: {
-          type: 'value',
-          max: 100
-        },
-        series: [
-          {
-            name: 'CPU',
-            type: 'line',
-            data: [30, 40, 20, 50, 60, 40]
-          },
-          {
-            name: '内存',
-            type: 'line',
-            data: [60, 70, 50, 80, 70, 60]
-          }
-        ]
+    async loadData() {
+      try {
+        const [statsResp, clientsResp, filesResp] = await Promise.all([
+          axios.get('/api/admin/stats'),
+          axios.get('/api/admin/clients'),
+          axios.get('/api/admin/files')
+        ])
+        this.stats = {
+          totalClients: statsResp.data.total_clients || 0,
+          onlineClients: statsResp.data.online_clients || 0,
+          totalFiles: statsResp.data.total_files || 0
+        }
+        const clients = clientsResp.data.clients || []
+        this.recentClients = clients.slice(-5).reverse()
+        const files = filesResp.data.files || []
+        this.recentFiles = files.slice(-5).reverse()
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err)
       }
-      
-      this.loadChart.setOption(option)
+    },
+    formatSize(size) {
+      if (!size) return '0 B'
+      if (size < 1024) return size + ' B'
+      if (size < 1024 * 1024) return (size / 1024).toFixed(2) + ' KB'
+      return (size / (1024 * 1024)).toFixed(2) + ' MB'
     }
   }
 }
@@ -163,11 +167,7 @@ export default {
   color: #606266;
 }
 
-.chart-container {
+.recent-section {
   margin-top: 20px;
-}
-
-.chart-card {
-  height: 350px;
 }
 </style>

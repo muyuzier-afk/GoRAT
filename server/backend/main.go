@@ -5,11 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
-	"campus-management-server/controllers"
-	"campus-management-server/models"
-	"campus-management-server/utils"
+	"gorat-server/controllers"
+	"gorat-server/models"
+	"gorat-server/utils"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -42,8 +43,15 @@ func main() {
 	r := gin.Default()
 
 	// 配置CORS
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	var origins []string
+	if allowedOrigins != "" {
+		origins = strings.Split(allowedOrigins, ",")
+	} else {
+		origins = []string{"http://localhost:3000"}
+	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     origins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -59,6 +67,9 @@ func main() {
 	// API路由组
 	api := r.Group("/api")
 	{
+		// 管理员登录（无需认证）
+		api.POST("/admin/login", controllers.Login)
+
 		// 客户端相关路由
 		client := api.Group("/client")
 		{
@@ -74,6 +85,9 @@ func main() {
 		admin := api.Group("/admin")
 		admin.Use(controllers.AuthMiddleware())
 		{
+			// Dashboard
+			admin.GET("/stats", controllers.GetDashboardStats)
+
 			// 客户端管理
 			admin.GET("/clients", controllers.GetClients)
 			admin.GET("/client/:id", controllers.GetClientDetail)
