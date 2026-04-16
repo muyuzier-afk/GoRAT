@@ -3,19 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/mail"
-	"net/mime"
-	"net/mime/multipart"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,35 +22,28 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// 配置
-const (
-	serverEndpoint = "http://localhost:8000" // 服务端地址
-	deviceID       = "factory-001"             // 每台设备不同
-	configFile     = "factoryeye_config.json"  // 配置文件
+var (
+	serverEndpoint = "http://localhost:8000"
+	deviceID       = "factory-001"
+	configFile     = "gorat_client_config.json"
+	osType         string
 )
 
-// 操作系统类型
-var osType string
-
 func init() {
-	// 通过编译参数设置操作系统类型
-	// 编译时使用: go build -ldflags "-X main.osType=Windows" 或 "-X main.osType=Linux"
-	if osType == "" {
-		// 自动检测操作系统
-		if runtime.GOOS == "windows" {
-			osType = "Windows"
-		} else {
-			osType = "Linux"
-		}
+	if runtime.GOOS == "windows" {
+		osType = "Windows"
+	} else {
+		osType = "Linux"
 	}
 }
 
 type ClientConfig struct {
-	S3Endpoint  string `json:"s3_endpoint"`
-	S3AccessKey string `json:"s3_access_key"`
-	S3SecretKey string `json:"s3_secret_key"`
-	S3Region    string `json:"s3_region"`
-	S3Bucket    string `json:"s3_bucket"`
+	S3Bucket        string `json:"s3_bucket"`
+	VideoUploadURL  string `json:"video_upload_url"`
+	VideoUploadKey  string `json:"video_upload_key"`
+	InfoUploadURL   string `json:"info_upload_url"`
+	InfoUploadKey   string `json:"info_upload_key"`
+	UploadExpiresIn int    `json:"upload_expires_in"`
 }
 
 type AgentCredentials struct {
@@ -62,88 +52,142 @@ type AgentCredentials struct {
 }
 
 type Agent struct {
-	serverClient  *http.Client
-	sessionID     string
-	credentials   *AgentCredentials
-	clientConfig  *ClientConfig
+	serverClient *http.Client
+	sessionID    string
+	credentials  *AgentCredentials
+	clientConfig *ClientConfig
+	mu           sync.Mutex
 }
 
+var (
+	instanceLock   sync.Mutex
+	lockFileHandle *os.File
+)
+
 func main() {
-	// 单实例检查
-	if !isSingleInstance() {
-		log.Println("程序已在运行中")
-		os.Exit(0)
+	flag.StringVar(&serverEndpoint, "server", "http://localhost:8000", "Server endpoint URL")
+	flag.StringVar(&deviceID, "device", "factory-001", "Device ID")
+	ldflagsOsType := flag.String("os-type", "", "OS type override (Windows/Linux)")
+	flag.Parse()
+
+	if *ldflagsOsType != "" {
+		osType = *ldflagsOsType
 	}
 
-	// 初始化服务器客户端
-	serverClient := initServerClient()
+	if !isSingleInstance() {
+		log.Println("Another instance is already running")
+		os.Exit(0)
+	}
+	defer releaseLock()
+
+	serverClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 
 	agent := &Agent{
 		serverClient: serverClient,
 		sessionID:    generateSessionID(),
 	}
 
-	// 尝试加载或注册凭证
 	if err := agent.loadOrRegisterCredentials(); err != nil {
 		log.Fatalf("Failed to load/register credentials: %v", err)
 	}
 
-	// 从服务端获取S3配置
 	if err := agent.fetchClientConfig(); err != nil {
 		log.Fatalf("Failed to fetch client config: %v", err)
 	}
 
-	// 上传设备信息
 	agent.uploadDeviceInfo()
 
-	// 启动系统信息采集协程
 	go agent.collectAndUploadSystemInfo()
-
-	// 启动视频采集协程
 	go agent.recordAndUpload()
-
-	// 启动心跳协程
 	go agent.sendHeartbeat()
 
-	// 保持程序运行
 	select {}
 }
 
 func isSingleInstance() bool {
-	if osType == "Windows" {
-		// 在Windows上使用tasklist命令
-		cmd := exec.Command("cmd", "/c", "tasklist", "/FI", "IMAGENAME eq factoryeye.exe")
-		output, err := cmd.Output()
-		if err != nil {
-			return true
-		}
-		count := strings.Count(string(output), "factoryeye.exe")
-		return count <= 1
-	} else {
-		// 在Linux上使用ps命令
-		cmd := exec.Command("ps", "aux")
-		output, err := cmd.Output()
-		if err != nil {
-			return true
-		}
-		count := strings.Count(string(output), "factoryeye")
-		return count <= 1
+	lockPath := filepath.Join(os.TempDir(), "gorat-client.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		log.Printf("Warning: could not open lock file: %v", err)
+		return true
 	}
+
+	err = tryFileLock(f)
+	if err != nil {
+		f.Close()
+		return false
+	}
+
+	lockFileHandle = f
+	return true
 }
 
-func initServerClient() *http.Client {
-	return &http.Client{
-		Timeout: 30 * time.Second,
+func tryFileLock(f *os.File) error {
+	if runtime.GOOS == "windows" {
+		// On Windows, try non-blocking exclusive lock via syscall
+		// Fallback: check process list
+		return checkProcessList()
+	}
+	// On Unix, use flock via File syscall not available in stdlib,
+	// so we use a simpler pid-file approach
+	pid := []byte(fmt.Sprintf("%d", os.Getpid()))
+	f.Truncate(0)
+	f.Seek(0, 0)
+	f.Write(pid)
+	return nil
+}
+
+func checkProcessList() error {
+	if osType == "Windows" {
+		cmd := exec.Command("cmd", "/c", "tasklist", "/FI", "IMAGENAME eq gorat-client.exe")
+		output, err := cmd.Output()
+		if err != nil {
+			return nil
+		}
+		lines := strings.Split(string(output), "\n")
+		count := 0
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), "gorat-client.exe") {
+				count++
+			}
+		}
+		if count > 1 {
+			return fmt.Errorf("already running")
+		}
+	} else {
+		cmd := exec.Command("pgrep", "-x", "gorat-client")
+		output, err := cmd.Output()
+		if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+			pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+			selfPid := fmt.Sprintf("%d", os.Getpid())
+			otherCount := 0
+			for _, pid := range pids {
+				if strings.TrimSpace(pid) != selfPid {
+					otherCount++
+				}
+			}
+			if otherCount > 0 {
+				return fmt.Errorf("already running")
+			}
+		}
+	}
+	return nil
+}
+
+func releaseLock() {
+	if lockFileHandle != nil {
+		lockPath := lockFileHandle.Name()
+		lockFileHandle.Close()
+		os.Remove(lockPath)
 	}
 }
 
 func (a *Agent) loadOrRegisterCredentials() error {
-	// 尝试从文件加载凭证
 	if a.tryLoadCredentials() {
 		return nil
 	}
-
-	// 注册新客户端
 	return a.registerNewClient()
 }
 
@@ -158,6 +202,10 @@ func (a *Agent) tryLoadCredentials() bool {
 		return false
 	}
 
+	if creds.ClientID == "" || creds.ClientKey == "" {
+		return false
+	}
+
 	a.credentials = &creds
 	return true
 }
@@ -167,7 +215,6 @@ func (a *Agent) saveCredentials() error {
 	if err != nil {
 		return err
 	}
-
 	return os.WriteFile(configFile, data, 0600)
 }
 
@@ -186,13 +233,23 @@ func (a *Agent) registerNewClient() error {
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("registration failed with status: %d", resp.StatusCode)
 	}
 
-	clientID, _ := result["client_id"].(string)
-	clientKey, _ := result["client_key"].(string)
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode registration response: %v", err)
+	}
+
+	clientID, ok := result["client_id"].(string)
+	if !ok || clientID == "" {
+		return fmt.Errorf("invalid client_id in registration response")
+	}
+	clientKey, ok := result["client_key"].(string)
+	if !ok || clientKey == "" {
+		return fmt.Errorf("invalid client_key in registration response")
+	}
 
 	a.credentials = &AgentCredentials{
 		ClientID:  clientID,
@@ -215,20 +272,49 @@ func (a *Agent) fetchClientConfig() error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("config request failed with status: %d", resp.StatusCode)
+	}
+
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
+		return fmt.Errorf("failed to decode config response: %v", err)
 	}
 
-	configData, _ := result["config"].(map[string]interface{})
-	a.clientConfig = &ClientConfig{
-		S3Endpoint:  configData["s3_endpoint"].(string),
-		S3AccessKey: configData["s3_access_key"].(string),
-		S3SecretKey: configData["s3_secret_key"].(string),
-		S3Region:    configData["s3_region"].(string),
-		S3Bucket:    configData["s3_bucket"].(string),
+	configData, ok := result["config"].(map[string]interface{})
+	if !ok {
+		configData = result
 	}
 
+	getStr := func(m map[string]interface{}, key string) string {
+		v, ok := m[key].(string)
+		if !ok {
+			return ""
+		}
+		return v
+	}
+	getInt := func(m map[string]interface{}, key string) int {
+		v, ok := m[key].(float64)
+		if !ok {
+			return 0
+		}
+		return int(v)
+	}
+
+	cfg := &ClientConfig{
+		S3Bucket:        getStr(configData, "s3_bucket"),
+		VideoUploadURL:  getStr(configData, "video_upload_url"),
+		VideoUploadKey:  getStr(configData, "video_upload_key"),
+		InfoUploadURL:   getStr(configData, "info_upload_url"),
+		InfoUploadKey:   getStr(configData, "info_upload_key"),
+		UploadExpiresIn: getInt(configData, "upload_expires_in"),
+	}
+
+	if cfg.S3Bucket == "" {
+		return fmt.Errorf("missing s3_bucket in config response")
+	}
+
+	a.clientConfig = cfg
 	return nil
 }
 
@@ -253,7 +339,9 @@ func (a *Agent) sendHeartbeat() {
 		data := map[string]interface{}{
 			"device_id": deviceID,
 		}
-		a.postRequest(url, data)
+		if err := a.postRequest(url, data); err != nil {
+			log.Printf("Heartbeat failed: %v", err)
+		}
 		time.Sleep(60 * time.Second)
 	}
 }
@@ -276,6 +364,9 @@ func (a *Agent) postRequest(url string, data interface{}) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("request to %s failed with status %d", url, resp.StatusCode)
+	}
 	return nil
 }
 
@@ -284,22 +375,18 @@ func generateSessionID() string {
 }
 
 func (a *Agent) uploadFile(fileType string, data []byte, filename string) error {
-	url := fmt.Sprintf("http://localhost:8000/api/client/upload/%s", fileType)
+	url := fmt.Sprintf("%s/api/client/upload/%s", serverEndpoint, fileType)
 
-	// 创建multipart表单
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
 
-	// 添加device_id字段
 	w.WriteField("device_id", deviceID)
 
-	// 添加文件字段
 	fw, err := w.CreateFormFile(fileType, filename)
 	if err != nil {
 		return err
 	}
-	_, err = fw.Write(data)
-	if err != nil {
+	if _, err := fw.Write(data); err != nil {
 		return err
 	}
 	w.Close()
@@ -316,6 +403,9 @@ func (a *Agent) uploadFile(fileType string, data []byte, filename string) error 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("upload failed with status %d", resp.StatusCode)
+	}
 	return nil
 }
 
@@ -328,7 +418,9 @@ func (a *Agent) uploadDeviceInfo() {
 	}
 
 	url := serverEndpoint + "/api/client/upload/info"
-	a.postRequest(url, data)
+	if err := a.postRequest(url, data); err != nil {
+		log.Printf("Failed to upload device info: %v", err)
+	}
 }
 
 func getOSInfo() string {
@@ -339,14 +431,13 @@ func getOSInfo() string {
 			return "Windows"
 		}
 		return strings.TrimSpace(string(output))
-	} else {
-		cmd := exec.Command("uname", "-a")
-		output, err := cmd.Output()
-		if err != nil {
-			return "Linux"
-		}
-		return strings.TrimSpace(string(output))
 	}
+	cmd := exec.Command("uname", "-a")
+	output, err := cmd.Output()
+	if err != nil {
+		return "Linux"
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func getLocalIP() string {
@@ -356,10 +447,7 @@ func getLocalIP() string {
 	}
 
 	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-		if iface.Flags&net.FlagLoopback != 0 {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 
@@ -395,15 +483,28 @@ func getLocalIP() string {
 
 func (a *Agent) collectAndUploadSystemInfo() {
 	for {
-		// 采集CPU
-		cpuPercent, _ := cpu.Percent(0, false)
-		// 采集内存
-		memInfo, _ := mem.VirtualMemory()
-		// 采集进程列表
-		processes, _ := process.Processes()
-		var procList []map[string]interface{}
+		cpuPct, err := cpu.Percent(0, false)
+		if err != nil || len(cpuPct) == 0 {
+			log.Printf("Failed to collect CPU info: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
 
-		// 限制进程数量，避免数据过大
+		memInfo, err := mem.VirtualMemory()
+		if err != nil {
+			log.Printf("Failed to collect memory info: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		processes, err := process.Processes()
+		if err != nil {
+			log.Printf("Failed to collect process list: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		var procList []map[string]interface{}
 		limit := 50
 		if len(processes) < limit {
 			limit = len(processes)
@@ -411,38 +512,37 @@ func (a *Agent) collectAndUploadSystemInfo() {
 
 		for _, p := range processes[:limit] {
 			name, _ := p.Name()
-			cpu, _ := p.CPUPercent()
-			mem, _ := p.MemoryPercent()
+			cpuVal, _ := p.CPUPercent()
+			memVal, _ := p.MemoryPercent()
 			procList = append(procList, map[string]interface{}{
 				"pid":  p.Pid,
 				"name": name,
-				"cpu":  cpu,
-				"mem":  mem,
+				"cpu":  cpuVal,
+				"mem":  memVal,
 			})
 		}
 
 		data := map[string]interface{}{
 			"timestamp": time.Now().Unix(),
-			"cpu":       cpuPercent[0],
+			"cpu":       cpuPct[0],
 			"mem_used":  memInfo.UsedPercent,
 			"processes": procList,
+			"device_id": deviceID,
 		}
 
 		url := serverEndpoint + "/api/client/upload/telemetry"
-	data["device_id"] = deviceID
-	a.postRequest(url, data)
+		if err := a.postRequest(url, data); err != nil {
+			log.Printf("Failed to upload telemetry: %v", err)
+		}
 
 		time.Sleep(30 * time.Second)
 	}
 }
 
 func (a *Agent) recordAndUpload() {
-	// 创建临时目录
-	tempDir := filepath.Join(os.TempDir(), "factoryeye")
+	tempDir := filepath.Join(os.TempDir(), "gorat-client")
 	os.MkdirAll(tempDir, 0755)
 
-	// 使用ffmpeg进行视频采集和编码
-	// 注意：需要在系统PATH中添加ffmpeg
 	segmentCounter := 1
 	for {
 		timestamp := time.Now().Format("2006-01-02_15_04_05")
@@ -450,7 +550,6 @@ func (a *Agent) recordAndUpload() {
 
 		var cmd *exec.Cmd
 		if osType == "Windows" {
-			// Windows设备
 			cmd = exec.Command(
 				"ffmpeg",
 				"-f", "dshow",
@@ -465,7 +564,6 @@ func (a *Agent) recordAndUpload() {
 				segmentFile,
 			)
 		} else {
-			// Linux设备
 			cmd = exec.Command(
 				"ffmpeg",
 				"-f", "v4l2",
@@ -483,21 +581,19 @@ func (a *Agent) recordAndUpload() {
 			)
 		}
 
-		err := cmd.Run()
-		if err != nil {
-			log.Printf("ffmpeg执行失败: %v", err)
+		if err := cmd.Run(); err != nil {
+			log.Printf("ffmpeg execution failed: %v", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		// 读取文件并上传
 		data, err := os.ReadFile(segmentFile)
 		if err == nil {
-			// 上传到服务器
-			a.uploadFile("video", data, filepath.Base(segmentFile))
+			if err := a.uploadFile("video", data, filepath.Base(segmentFile)); err != nil {
+				log.Printf("Failed to upload video: %v", err)
+			}
 		}
 
-		// 删除临时文件
 		os.Remove(segmentFile)
 
 		segmentCounter++

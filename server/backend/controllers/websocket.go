@@ -3,14 +3,33 @@ package controllers
 import (
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
+func isOriginAllowed(origin string) bool {
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = "http://localhost:3000"
+	}
+	for _, o := range strings.Split(allowedOrigins, ",") {
+		if strings.TrimSpace(o) == origin {
+			return true
+		}
+	}
+	return false
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许所有来源，实际项目中应该限制
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return false
+		}
+		return isOriginAllowed(origin)
 	},
 }
 

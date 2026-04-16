@@ -1,42 +1,16 @@
-module factoryeye
+module gorat-client
 
 go 1.20
 
+require github.com/shirou/gopsutil/v3 v3.23.11
+
 require (
-	github.com/aws/aws-sdk-go v1.44.312
-	github.com/shirou/gopsutil/v3 v3.23.11
-	github.com/abiosoft/ishell v2.2.0+incompatible
-	github.com/asticode/go-astisub v0.22.0
-	github.com/asticode/goav v0.0.0-20210802040946-4765431d3a9a
-	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311
-	github.com/davecgh/go-spew v1.1.1
-	github.com/disintegration/gift v1.2.1
-	github.com/gabriel-vasile/mimetype v1.4.2
-	github.com/go-playground/locales v0.14.1
-	github.com/go-playground/universal-translator v0.18.1
-	github.com/go-playground/validator/v10 v10.14.0
-	github.com/goccy/go-json v0.10.2
-	github.com/google/go-cmp v0.5.9
-	github.com/jinzhu/inflection v1.0.0
-	github.com/jinzhu/now v1.1.5
-	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/cpuid/v2 v2.2.4
-	github.com/leodido/go-urn v1.2.4
-	github.com/mattn/go-colorable v0.1.13
-	github.com/mattn/go-isatty v0.0.19
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd
-	github.com/modern-go/reflect2 v1.0.2
-	github.com/pelletier/go-toml/v2 v2.0.8
-	github.com/pmezard/go-difflib v1.0.0
-	github.com/rogpeppe/go-internal v1.10.0
-	github.com/twitchyliquid64/golang-asm v0.15.1
-	github.com/ugorji/go/codec v1.2.11
-	golang.org/x/arch v0.3.0
-	golang.org/x/crypto v0.9.0
-	golang.org/x/image v0.10.0
-	golang.org/x/net v0.10.0
-	golang.org/x/sys v0.8.0
-	golang.org/x/text v0.9.0
-	google.golang.org/protobuf v1.30.0
-	gopkg.in/yaml.v3 v3.0.1
+	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
+	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
+	github.com/shoenig/go-m1cpu v0.1.6 // indirect
+	github.com/tklauser/go-sysconf v0.3.12 // indirect
+	github.com/tklauser/numcpus v0.6.1 // indirect
+	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+	golang.org/x/sys v0.15.0 // indirect
 )
