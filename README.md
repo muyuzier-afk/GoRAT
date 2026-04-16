@@ -1,4 +1,3 @@
-```markdown
 # GoRAT
 
 GoRAT是一个跨平台的远程访问木马，提供客户端和服务端组件，支持Windows和Linux系统。
@@ -248,4 +247,3 @@ go run test_cross_platform.go
 
 注意：请合法使用本软件，仅用于授权的系统管理和安全研究目的。
 
-```
