@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gorat-server/models"
@@ -14,6 +16,28 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+const (
+	MaxFileSize = 100 * 1024 * 1024 // 100MB
+)
+
+func sanitizeFilename(filename string) string {
+	// 获取基本文件名，防止路径遍历
+	name := filepath.Base(filename)
+	// 移除非字母数字字符（保留扩展名分隔符和字母数字）
+	name = strings.ReplaceAll(name, "..", "")
+	// 移除非安全字符
+	allowed := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+	for _, c := range name {
+		if !strings.Contains(allowed, string(c)) {
+			name = strings.ReplaceAll(name, string(c), "_")
+		}
+	}
+	if name == "" || name == "." {
+		name = "uploaded_file"
+	}
+	return name
+}
 
 // RegisterClient 客户端注册
 func RegisterClient(c *gin.Context) {
@@ -89,7 +113,7 @@ func GetClientConfig(c *gin.Context) {
 
 	s3Bucket := os.Getenv("S3_BUCKET")
 	if s3Bucket == "" {
-		s3Bucket = "gorat-data"
+		panic("S3_BUCKET environment variable must be set")
 	}
 
 	videoPrefix := fmt.Sprintf("video/%s/", client.DeviceID)
@@ -163,6 +187,12 @@ func UploadVideo(c *gin.Context) {
 		return
 	}
 
+	// 文件大小验证
+	if file.Size > MaxFileSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("File too large, maximum size is %d MB", MaxFileSize/(1024*1024))})
+		return
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -177,20 +207,21 @@ func UploadVideo(c *gin.Context) {
 	}
 
 	date := time.Now().Format("2006-01-02")
-	s3Key := fmt.Sprintf("video/%s/%s/%s", deviceID, date, file.Filename)
+	safeFilename := sanitizeFilename(file.Filename)
+	s3Key := fmt.Sprintf("video/%s/%s/%s", deviceID, date, safeFilename)
 
 	s3Bucket := os.Getenv("S3_BUCKET")
 	if s3Bucket == "" {
-		s3Bucket = "gorat-data"
+		panic("S3_BUCKET environment variable must be set")
 	}
 	if err := utils.UploadToS3(s3Bucket, s3Key, fileData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to upload to S3: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload to S3"})
 		return
 	}
 
 	fileRecord := models.File{
 		ClientID:  client.ID,
-		Filename:  file.Filename,
+		Filename:  safeFilename,
 		Path:      s3Key,
 		Size:      file.Size,
 		Type:      "video",
@@ -281,10 +312,10 @@ func UploadInfo(c *gin.Context) {
 
 	s3Bucket := os.Getenv("S3_BUCKET")
 	if s3Bucket == "" {
-		s3Bucket = "gorat-data"
+		panic("S3_BUCKET environment variable must be set")
 	}
 	if err := utils.UploadToS3(s3Bucket, s3Key, infoData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to upload to S3: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload to S3"})
 		return
 	}
 

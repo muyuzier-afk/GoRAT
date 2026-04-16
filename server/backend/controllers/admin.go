@@ -22,7 +22,10 @@ type Claims struct {
 func getJWTSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "change-me-in-production"
+		panic("JWT_SECRET environment variable must be set")
+	}
+	if len(secret) < 32 {
+		panic("JWT_SECRET must be at least 32 characters")
 	}
 	return []byte(secret)
 }
@@ -89,11 +92,11 @@ func Login(c *gin.Context) {
 
 	adminUser := os.Getenv("ADMIN_USERNAME")
 	if adminUser == "" {
-		adminUser = "admin"
+		panic("ADMIN_USERNAME environment variable must be set")
 	}
 	adminPass := os.Getenv("ADMIN_PASSWORD")
 	if adminPass == "" {
-		adminPass = "changeme"
+		panic("ADMIN_PASSWORD environment variable must be set")
 	}
 
 	if req.Username != adminUser || req.Password != adminPass {
@@ -259,11 +262,18 @@ func PowerControl(c *gin.Context) {
 	}
 
 	var req struct {
-		Action string `json:"action"` // shutdown, restart, sleep
+		Action string `json:"action" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 验证 action 参数
+	validActions := map[string]bool{"shutdown": true, "restart": true, "sleep": true}
+	if !validActions[req.Action] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid action, must be shutdown, restart, or sleep"})
 		return
 	}
 
@@ -292,12 +302,25 @@ func ProcessControl(c *gin.Context) {
 	}
 
 	var req struct {
-		Action  string `json:"action"` // start, stop, kill
-		Process string `json:"process"`
+		Action  string `json:"action" binding:"required"`
+		Process string `json:"process" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 验证 action 参数
+	validActions := map[string]bool{"start": true, "stop": true, "kill": true}
+	if !validActions[req.Action] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid action, must be start, stop, or kill"})
+		return
+	}
+
+	// 验证进程名不包含危险字符
+	if strings.ContainsAny(req.Process, ";|&$`\\\"'<>") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid process name"})
 		return
 	}
 

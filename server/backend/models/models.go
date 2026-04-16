@@ -2,6 +2,7 @@ package models
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -76,8 +77,14 @@ type Command struct {
 func InitDB() error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "host=localhost user=postgres password=postgres dbname=gorat port=5432 sslmode=disable"
+		panic("DATABASE_URL environment variable must be set")
 	}
+
+	// 禁止使用默认 postgres 凭据
+	if strings.Contains(dsn, "password=postgres") && !strings.Contains(os.Getenv("DATABASE_URL"), "@") {
+		panic("Default postgres credentials not allowed")
+	}
+
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {

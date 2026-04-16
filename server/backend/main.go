@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"gorat-server/controllers"
@@ -41,6 +42,10 @@ func main() {
 
 	// 创建Gin引擎
 	r := gin.Default()
+	r.MaxMultipartMemory = 8 << 20 // 8 MB
+
+	// 限流中间件配置
+	rateLimiter := NewRateLimiter(100, time.Minute) // 100 请求/分钟
 
 	// 配置CORS
 	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
@@ -67,8 +72,8 @@ func main() {
 	// API路由组
 	api := r.Group("/api")
 	{
-		// 管理员登录（无需认证）
-		api.POST("/admin/login", controllers.Login)
+		// 管理员登录（限流保护）
+		api.POST("/admin/login", rateLimiter.Limit(), controllers.Login)
 
 		// 客户端相关路由
 		client := api.Group("/client")
@@ -119,5 +124,74 @@ func main() {
 	log.Printf("Server starting on port %s...", port)
 	if err := r.Run(fmt.Sprintf(":%s", port)); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+// RateLimiter 简易限流器
+type RateLimiter struct {
+	requests map[string][]time.Time
+	mu       sync.RWMutex
+	limit    int
+	window   time.Duration
+}
+
+func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
+	rl := &RateLimiter{
+		requests: make(map[string][]time.Time),
+		limit:    limit,
+		window:   window,
+	}
+	go rl.cleanup()
+	return rl
+}
+
+func (rl *RateLimiter) cleanup() {
+	ticker := time.NewTicker(time.Minute)
+	for range ticker.C {
+		rl.mu.Lock()
+		now := time.Now()
+		for ip, times := range rl.requests {
+			var valid []time.Time
+			for _, t := range times {
+				if now.Sub(t) < rl.window {
+					valid = append(valid, t)
+				}
+			}
+			if len(valid) == 0 {
+				delete(rl.requests, ip)
+			} else {
+				rl.requests[ip] = valid
+			}
+		}
+		rl.mu.Unlock()
+	}
+}
+
+func (rl *RateLimiter) Limit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		rl.mu.Lock()
+		defer rl.mu.Unlock()
+
+		now := time.Now()
+		times := rl.requests[ip]
+
+		// 清理过期的请求记录
+		var valid []time.Time
+		for _, t := range times {
+			if now.Sub(t) < rl.window {
+				valid = append(valid, t)
+			}
+		}
+
+		if len(valid) >= rl.limit {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Rate limit exceeded"})
+			c.Abort()
+			return
+		}
+
+		valid = append(valid, now)
+		rl.requests[ip] = valid
+		c.Next()
 	}
 }
