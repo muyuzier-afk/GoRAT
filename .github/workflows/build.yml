@@ -139,20 +139,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f -name "*" | head -50
 
       - name: Create checksums
         run: |
-          for f in gorat-*; do
-            sha256sum "$f" > "${f}.sha256"
-          done
+          find artifacts -type f -name "gorat-*" -exec sh -c '
+            for f; do
+              sha256sum "$f" > "$(basename "$f").sha256"
+            done
+          ' sh {} +
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            gorat-*.sha256
-            gorat-*
+            *.sha256
+            artifacts/gorat-server/**
+            artifacts/gorat-client/**
           draft: false
           prerelease: false
         env:
