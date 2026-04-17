@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -9,6 +10,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,16 +19,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
 var (
-	serverEndpoint = "http://localhost:8000"
-	deviceID       = "factory-001"
-	configFile     = "gorat_client_config.json"
-	osType         string
+	configDir = "config.toml"
+	osType    string
 )
 
 func init() {
@@ -35,6 +36,11 @@ func init() {
 	} else {
 		osType = "Linux"
 	}
+}
+
+type LocalConfig struct {
+	ServerURL string `toml:"server_url"`
+	DeviceID  string `toml:"device_id"`
 }
 
 type ClientConfig struct {
@@ -56,6 +62,7 @@ type Agent struct {
 	sessionID    string
 	credentials  *AgentCredentials
 	clientConfig *ClientConfig
+	localConfig  *LocalConfig
 	mu           sync.Mutex
 }
 
@@ -65,8 +72,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&serverEndpoint, "server", "http://localhost:8000", "Server endpoint URL")
-	flag.StringVar(&deviceID, "device", "factory-001", "Device ID")
+	deviceIDFlag := flag.String("device", "", "Device ID")
 	ldflagsOsType := flag.String("os-type", "", "OS type override (Windows/Linux)")
 	flag.Parse()
 
@@ -80,13 +86,13 @@ func main() {
 	}
 	defer releaseLock()
 
-	serverClient := &http.Client{
-		Timeout: 30 * time.Second,
+	agent := &Agent{
+		serverClient: &http.Client{Timeout: 30 * time.Second},
+		sessionID:    generateSessionID(),
 	}
 
-	agent := &Agent{
-		serverClient: serverClient,
-		sessionID:    generateSessionID(),
+	if err := agent.loadOrInitLocalConfig(deviceIDFlag); err != nil {
+		log.Fatalf("Failed to load/init config: %v", err)
 	}
 
 	if err := agent.loadOrRegisterCredentials(); err != nil {
@@ -184,6 +190,91 @@ func releaseLock() {
 	}
 }
 
+func (a *Agent) loadOrInitLocalConfig(deviceIDFlag *string) error {
+	configData := &LocalConfig{}
+
+	if _, err := toml.DecodeFile(configDir, configData); err == nil && configData.ServerURL != "" {
+		a.localConfig = configData
+		if deviceIDFlag != nil && *deviceIDFlag != "" {
+			a.localConfig.DeviceID = *deviceIDFlag
+			if err := a.saveLocalConfig(); err != nil {
+				return fmt.Errorf("failed to update device_id: %v", err)
+			}
+		}
+		return nil
+	}
+
+	fmt.Println("=== GoRAT Client Initialization ===")
+	fmt.Println()
+
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Print("Server URL (e.g., http://example.com/): ")
+		serverURL, _ := reader.ReadString('\n')
+		serverURL = strings.TrimSpace(serverURL)
+
+		if serverURL == "" {
+			fmt.Println("Server URL is required")
+			continue
+		}
+
+		if _, err := url.Parse(serverURL); err != nil {
+			fmt.Println("Invalid URL format")
+			continue
+		}
+
+		if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+			fmt.Println("URL must start with http:// or https://")
+			continue
+		}
+
+		if !strings.HasSuffix(serverURL, "/") {
+			serverURL += "/"
+		}
+
+		configData.ServerURL = serverURL
+		break
+	}
+
+	if deviceIDFlag != nil && *deviceIDFlag != "" {
+		configData.DeviceID = *deviceIDFlag
+	} else {
+		fmt.Print("Device ID (leave empty for auto-generated): ")
+		deviceID, _ := reader.ReadString('\n')
+		deviceID = strings.TrimSpace(deviceID)
+		if deviceID == "" {
+			deviceID = fmt.Sprintf("device-%s", generateShortID())
+		}
+		configData.DeviceID = deviceID
+	}
+
+	a.localConfig = configData
+
+	if err := a.saveLocalConfig(); err != nil {
+		return fmt.Errorf("failed to save config: %v", err)
+	}
+
+	fmt.Println("Configuration saved to config.toml")
+	fmt.Println("Run the client again to start.")
+
+	return nil
+}
+
+func (a *Agent) saveLocalConfig() error {
+	f, err := os.Create(configDir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return toml.NewEncoder(f).Encode(a.localConfig)
+}
+
+func generateShortID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())[:12]
+}
+
 func (a *Agent) loadOrRegisterCredentials() error {
 	if a.tryLoadCredentials() {
 		return nil
@@ -192,7 +283,8 @@ func (a *Agent) loadOrRegisterCredentials() error {
 }
 
 func (a *Agent) tryLoadCredentials() bool {
-	data, err := os.ReadFile(configFile)
+	credsFile := a.localConfig.DeviceID + "_creds.json"
+	data, err := os.ReadFile(credsFile)
 	if err != nil {
 		return false
 	}
@@ -211,18 +303,19 @@ func (a *Agent) tryLoadCredentials() bool {
 }
 
 func (a *Agent) saveCredentials() error {
+	credsFile := a.localConfig.DeviceID + "_creds.json"
 	data, err := json.Marshal(a.credentials)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, data, 0600)
+	return os.WriteFile(credsFile, data, 0600)
 }
 
 func (a *Agent) registerNewClient() error {
-	url := serverEndpoint + "/api/client/register"
+	url := a.localConfig.ServerURL + "api/client/register"
 	data := map[string]interface{}{
-		"device_id": deviceID,
-		"name":      deviceID,
+		"device_id": a.localConfig.DeviceID,
+		"name":      a.localConfig.DeviceID,
 		"ip":        getLocalIP(),
 		"os":        osType,
 	}
@@ -260,7 +353,7 @@ func (a *Agent) registerNewClient() error {
 }
 
 func (a *Agent) fetchClientConfig() error {
-	url := serverEndpoint + "/api/client/config"
+	url := a.localConfig.ServerURL + "api/client/config"
 	data := map[string]interface{}{
 		"client_id":  a.credentials.ClientID,
 		"client_key": a.credentials.ClientKey,
@@ -335,9 +428,9 @@ func (a *Agent) postRequestWithResponse(url string, data interface{}) (*http.Res
 
 func (a *Agent) sendHeartbeat() {
 	for {
-		url := serverEndpoint + "/api/client/heartbeat"
+		url := a.localConfig.ServerURL + "api/client/heartbeat"
 		data := map[string]interface{}{
-			"device_id": deviceID,
+			"device_id": a.localConfig.DeviceID,
 		}
 		if err := a.postRequest(url, data); err != nil {
 			log.Printf("Heartbeat failed: %v", err)
@@ -375,12 +468,12 @@ func generateSessionID() string {
 }
 
 func (a *Agent) uploadFile(fileType string, data []byte, filename string) error {
-	url := fmt.Sprintf("%s/api/client/upload/%s", serverEndpoint, fileType)
+	url := fmt.Sprintf("%sapi/client/upload/%s", a.localConfig.ServerURL, fileType)
 
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
 
-	w.WriteField("device_id", deviceID)
+	w.WriteField("device_id", a.localConfig.DeviceID)
 
 	fw, err := w.CreateFormFile(fileType, filename)
 	if err != nil {
@@ -411,13 +504,13 @@ func (a *Agent) uploadFile(fileType string, data []byte, filename string) error 
 
 func (a *Agent) uploadDeviceInfo() {
 	data := map[string]interface{}{
-		"device_id":  deviceID,
+		"device_id":  a.localConfig.DeviceID,
 		"session_id": a.sessionID,
 		"start_time": time.Now().Format(time.RFC3339),
 		"os":         getOSInfo(),
 	}
 
-	url := serverEndpoint + "/api/client/upload/info"
+	url := a.localConfig.ServerURL + "api/client/upload/info"
 	if err := a.postRequest(url, data); err != nil {
 		log.Printf("Failed to upload device info: %v", err)
 	}
@@ -527,10 +620,10 @@ func (a *Agent) collectAndUploadSystemInfo() {
 			"cpu":       cpuPct[0],
 			"mem_used":  memInfo.UsedPercent,
 			"processes": procList,
-			"device_id": deviceID,
+			"device_id": a.localConfig.DeviceID,
 		}
 
-		url := serverEndpoint + "/api/client/upload/telemetry"
+		url := a.localConfig.ServerURL + "api/client/upload/telemetry"
 		if err := a.postRequest(url, data); err != nil {
 			log.Printf("Failed to upload telemetry: %v", err)
 		}
