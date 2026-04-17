@@ -1,7 +1,9 @@
 package main
 
 import (
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -17,6 +19,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
+
+//go:embed dist
+var staticFiles embed.FS
 
 func main() {
 	// 加载环境变量
@@ -112,8 +117,9 @@ func main() {
 		api.GET("/ws/:clientId", controllers.WebSocketHandler)
 	}
 
-	// 静态文件服务
-	r.Static("/static", "./static")
+	// 静态文件服务（嵌入式前端）
+	fs, _ := fs.Sub(staticFiles, "dist")
+	r.StaticFS("/", http.FS(fs))
 
 	// 启动服务器
 	port := os.Getenv("PORT")

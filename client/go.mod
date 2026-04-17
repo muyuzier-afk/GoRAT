@@ -2,7 +2,10 @@ module gorat-client
 
 go 1.20
 
-require github.com/shirou/gopsutil/v3 v3.23.11
+require (
+	github.com/BurntSushi/toml v1.6.0
+	github.com/shirou/gopsutil/v3 v3.23.11
+)
 
 require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
