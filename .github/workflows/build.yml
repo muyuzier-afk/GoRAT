@@ -139,21 +139,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Display structure of downloaded files
-        run: ls -R artifacts
+          merge-multiple: true
 
       - name: Create checksums
         run: |
-          cd artifacts
-          find . -type f -name "*" | while read f; do
+          for f in gorat-*; do
             sha256sum "$f" > "${f}.sha256"
           done
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*.sha256
+          files: |
+            gorat-*.sha256
+            gorat-*
           draft: false
           prerelease: false
         env:
