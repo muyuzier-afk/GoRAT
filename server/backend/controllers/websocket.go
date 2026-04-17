@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"gorat-server/models"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -36,6 +38,20 @@ var upgrader = websocket.Upgrader{
 // WebSocketHandler WebSocket处理
 func WebSocketHandler(c *gin.Context) {
 	clientID := c.Param("clientId")
+	clientKey := c.GetHeader("X-Client-Key")
+
+	// 验证客户端身份
+	var client models.Client
+	if err := models.DB.Where("client_id = ? AND status = ?", clientID, "online").First(&client).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or offline client"})
+		return
+	}
+
+	// 验证 clientKey
+	if clientKey == "" || clientKey != client.ClientKey {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid client key"})
+		return
+	}
 
 	// 升级HTTP连接为WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
