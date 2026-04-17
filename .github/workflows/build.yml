@@ -141,23 +141,22 @@ jobs:
           path: artifacts
 
       - name: List artifacts
-        run: find artifacts -type f -name "*" | head -50
+        run: find artifacts -type f | head -50
 
-      - name: Create checksums
+      - name: Prepare release files
         run: |
-          find artifacts -type f -name "gorat-*" -exec sh -c '
-            for f; do
-              sha256sum "$f" > "$(basename "$f").sha256"
-            done
-          ' sh {} +
+          find artifacts -type f -name "gorat-*" | while read f; do
+            cp "$f" .
+            sha256sum "$(basename "$f")" > "$(basename "$f").sha256"
+          done
+          ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            *.sha256
-            artifacts/gorat-server/**
-            artifacts/gorat-client/**
+            gorat-*
+            gorat-*.sha256
           draft: false
           prerelease: false
         env:
