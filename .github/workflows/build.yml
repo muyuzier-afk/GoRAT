@@ -9,8 +9,8 @@ on:
       - main
 
 env:
-  GO_VERSION: '1.21'
-  NODE_VERSION: '18'
+  GO_VERSION: '1.22'
+  NODE_VERSION: '20'
 
 jobs:
   # Build frontend
@@ -23,8 +23,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: server/frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: server/frontend
@@ -64,8 +62,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: 'go'
-          cache-dependency-path: server/backend/go.sum
 
       - name: Download dependencies
         working-directory: server/backend
@@ -105,8 +101,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: 'go'
-          cache-dependency-path: client/go.sum
 
       - name: Download dependencies
         working-directory: client
